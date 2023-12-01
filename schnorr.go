@@ -1,4 +1,4 @@
-package svid
+package schoco
 
 import (
 	"fmt"
