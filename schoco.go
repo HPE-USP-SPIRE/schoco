@@ -75,35 +75,36 @@ func Verify(origpubkey kyber.Point, setPartSig []kyber.Point, setMessages []stri
 	var i = len(setPartSig) - 1
 	var y kyber.Point
 	var h kyber.Scalar
+	var leftside, rightside kyber.Point
 
 	if len(setPartSig) == 1 {
 		y = origpubkey
 		// check if g ^ lastsig.S = lastsig.R - y ^ lastHash
-		leftside := curve.Point().Mul(lastsigS, g)
+		leftside = curve.Point().Mul(lastsigS, g)
 		h = Hash(setPartSig[i].String() + setMessages[i] + y.String())
-		rightside := curve.Point().Sub(setPartSig[i], curve.Point().Mul(h, y))
-		return leftside.Equal(rightside)
-	}
-
-	// calculate all y's from first to last-1 parts
-	for i > 0 {
-		if i == len(setPartSig)-1 {
-			y = origpubkey
-		} else {
-			h = Hash(setPartSig[i+1].String() + setMessages[i+1] + y.String())
-			y = curve.Point().Sub(setPartSig[i+1], curve.Point().Mul(h, y))
+		rightside = curve.Point().Sub(setPartSig[i], curve.Point().Mul(h, y))
+		// return leftside.Equal(rightside)
+	} else {
+		// calculate all y's from first to last-1 parts
+		for i > 0 {
+			if i == len(setPartSig)-1 {
+				y = origpubkey
+			} else {
+				h = Hash(setPartSig[i+1].String() + setMessages[i+1] + y.String())
+				y = curve.Point().Sub(setPartSig[i+1], curve.Point().Mul(h, y))
+			}
+			i--
 		}
-		i--
+
+		// calculate last y
+		h = Hash(setPartSig[i+1].String() + setMessages[i+1] + y.String())
+		y = curve.Point().Sub(setPartSig[i+1], curve.Point().Mul(h, y))
+
+		// check if g ^ lastsig.S = lastsig.R - y ^ lastHash
+		leftside = curve.Point().Mul(lastsigS, g)
+		h = Hash(setPartSig[i].String() + setMessages[i] + y.String())
+		rightside = curve.Point().Sub(setPartSig[i], curve.Point().Mul(h, y))
 	}
-
-	// calculate last y
-	h = Hash(setPartSig[i+1].String() + setMessages[i+1] + y.String())
-	y = curve.Point().Sub(setPartSig[i+1], curve.Point().Mul(h, y))
-
-	// check if g ^ lastsig.S = lastsig.R - y ^ lastHash
-	leftside := curve.Point().Mul(lastsigS, g)
-	h = Hash(setPartSig[i].String() + setMessages[i] + y.String())
-	rightside := curve.Point().Sub(setPartSig[i], curve.Point().Mul(h, y))
 
 	return leftside.Equal(rightside)
 }
