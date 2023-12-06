@@ -1,4 +1,4 @@
-// SchoCo package allows to concatenate two Schnorr EdDSA signatures.
+// SchoCo package allows to concatenate Schnorr EdDSA signatures.
 // 
 // Usage:
 // Given an existing signature S_1 over m_1, one can concatenate it with a new one, by doing:
@@ -32,12 +32,88 @@ type Signature struct {
 	S kyber.Scalar
 }
 
+// given a new message m and an existing signature sig_1,
+// return an schoco signature sig_2 = {partSig1, sig2}
+// If sig_1 is already a concatenated signature, aggregation uses only the last complete signature (partSig_n, aggkey_n).
+// The resulting concatenated signature is composed of all previous partial signatures (partsig_1, ..., partsig_n) and the new signature sig_n+1.
+func Aggregate(m string, sig1 Signature) (kyber.Point, Signature) {
+
+	// Pick a random k from allowed set.
+	k := curve.Scalar().Pick(curve.RandomStream())
+
+	// r = k * G (a.k.a the same operation as r = g^k)
+	r := curve.Point().Mul(k, g)
+
+	// Extract aggKey and partial signature
+	aggKey, partSig1 := sig1.ExtractAggKey()
+
+	// h := Hash(r.String() + m + publicKey)
+	publicKey := curve.Point().Mul(aggKey, g)
+	h := Hash(r.String() + m + publicKey.String())
+
+	// s = k - e * x
+	s := curve.Scalar().Sub(k, curve.Scalar().Mul(h, aggKey))
+
+	// Return the partial signature and the new full signature
+	return partSig1, Signature{R: r, S: s}
+}
+
+// Verify concatenated EdDSA signatures using SchoCo scheme
+// origpubkey: first public key
+// setPartSig: array with all Sig.R
+// setMessages: array with all messages
+// lastsigS: last signature.S
+func Verify(origpubkey kyber.Point, setPartSig []kyber.Point, setMessages []string, lastsigS kyber.Scalar) bool {
+
+	// Important to note that as new assertions are added in the beginning of the token, the content of arrays is in reverse order.
+	// e.g. setPartSig[0] = last appended signature.
+	if (len(setPartSig)) != len(setMessages) {
+		fmt.Println("Incorrect parameters!")
+		return false
+	}
+
+	var i = len(setPartSig) - 1
+	var y kyber.Point
+	var h kyber.Scalar
+
+	if len(setPartSig) == 1 {
+		y = origpubkey
+		// check if g ^ lastsig.S = lastsig.R - y ^ lastHash
+		leftside := curve.Point().Mul(lastsigS, g)
+		h = Hash(setPartSig[i].String() + setMessages[i] + y.String())
+		rightside := curve.Point().Sub(setPartSig[i], curve.Point().Mul(h, y))
+		return leftside.Equal(rightside)
+	}
+
+	// calculate all y's from first to last-1 parts
+	for i > 0 {
+		if i == len(setPartSig)-1 {
+			y = origpubkey
+		} else {
+			h = Hash(setPartSig[i+1].String() + setMessages[i+1] + y.String())
+			y = curve.Point().Sub(setPartSig[i+1], curve.Point().Mul(h, y))
+		}
+		i--
+	}
+
+	// calculate last y
+	h = Hash(setPartSig[i+1].String() + setMessages[i+1] + y.String())
+	y = curve.Point().Sub(setPartSig[i+1], curve.Point().Mul(h, y))
+
+	// check if g ^ lastsig.S = lastsig.R - y ^ lastHash
+	leftside := curve.Point().Mul(lastsigS, g)
+	h = Hash(setPartSig[i].String() + setMessages[i] + y.String())
+	rightside := curve.Point().Sub(setPartSig[i], curve.Point().Mul(h, y))
+
+	return leftside.Equal(rightside)
+}
+
 // Sign using Schnorr EdDSA
 // SchoCo uses the same signature algorithm. 
 // Difference is in the key used
 // m: Message
 // x: Private key
-func Sign(m string, z kyber.Scalar) Signature {
+func StdSign(m string, z kyber.Scalar) Signature {
 
 	// Pick a random k from allowed set.
 	k := curve.Scalar().Pick(curve.RandomStream())
@@ -53,79 +129,6 @@ func Sign(m string, z kyber.Scalar) Signature {
 	s := curve.Scalar().Sub(k, curve.Scalar().Mul(h, z))
 
 	return Signature{R: r, S: s}
-}
-
-// given a new message m and an existing signature,
-// return an schoco signature Sig_2 = {partSig1, Sig2}
-func Aggregate(m string, sig Signature) (kyber.Point, Signature) {
-
-	// Pick a random k from allowed set.
-	k := curve.Scalar().Pick(curve.RandomStream())
-
-	// r = k * G (a.k.a the same operation as r = g^k)
-	r := curve.Point().Mul(k, g)
-
-	// Extract aggKey
-	aggKey, partSig := sig.ExtractAggKey()
-
-	// h := Hash(r.String() + m + publicKey)
-	publicKey := curve.Point().Mul(aggKey, g)
-	h := Hash(r.String() + m + publicKey.String())
-
-	// s = k - e * x
-	s := curve.Scalar().Sub(k, curve.Scalar().Mul(h, aggKey))
-
-	return partSig, Signature{R: r, S: s}
-}
-
-// Verify concatenated EdDSA signatures using SchoCo scheme
-// origpubkey: first public key
-// setSigR: array with all Sig.R
-// setM: array with all messages
-// lastsigS: last signature.S
-func Verify(origpubkey kyber.Point, setSigR []kyber.Point, setM []string, lastsigS kyber.Scalar) bool {
-
-	// Important to note that as new assertions are added in the beginning of the token, the content of arrays is in reverse order.
-	// e.g. setSigR[0] = last appended signature.
-	if (len(setSigR)) != len(setM) {
-		fmt.Println("Incorrect parameters!")
-		return false
-	}
-
-	var i = len(setSigR) - 1
-	var y kyber.Point
-	var h kyber.Scalar
-
-	if len(setSigR) == 1 {
-		y = origpubkey
-		// check if g ^ lastsig.S = lastsig.R - y ^ lastHash
-		leftside := curve.Point().Mul(lastsigS, g)
-		h = Hash(setSigR[i].String() + setM[i] + y.String())
-		rightside := curve.Point().Sub(setSigR[i], curve.Point().Mul(h, y))
-		return leftside.Equal(rightside)
-	}
-
-	// calculate all y's from first to last-1 parts
-	for i > 0 {
-		if i == len(setSigR)-1 {
-			y = origpubkey
-		} else {
-			h = Hash(setSigR[i+1].String() + setM[i+1] + y.String())
-			y = curve.Point().Sub(setSigR[i+1], curve.Point().Mul(h, y))
-		}
-		i--
-	}
-
-	// calculate last y
-	h = Hash(setSigR[i+1].String() + setM[i+1] + y.String())
-	y = curve.Point().Sub(setSigR[i+1], curve.Point().Mul(h, y))
-
-	// check if g ^ lastsig.S = lastsig.R - y ^ lastHash
-	leftside := curve.Point().Mul(lastsigS, g)
-	h = Hash(setSigR[i].String() + setM[i] + y.String())
-	rightside := curve.Point().Sub(setSigR[i], curve.Point().Mul(h, y))
-
-	return leftside.Equal(rightside)
 }
 
 // StdVerify is the STD validation of a Schnorr EdDSA signature

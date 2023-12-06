@@ -21,7 +21,7 @@ func TestBasic(t *testing.T) {
 	t.Run("Std Schnorr Signature creation and Validation", func(t *testing.T) {
 
 		// generate signature
-		signature := schoco.Sign(message1, rootSecretKey)
+		signature := schoco.StdSign(message1, rootSecretKey)
 
 		// Validate the signature using the public key
 		if !schoco.StdVerify(message1, signature, rootPublicKey) {
@@ -32,7 +32,7 @@ func TestBasic(t *testing.T) {
 	t.Run("Test schoco.Aggregate: ", func(t *testing.T) { 
 
 		// generate signature
-		signature1 := schoco.Sign(message1, rootSecretKey)
+		signature1 := schoco.StdSign(message1, rootSecretKey)
 
 		// Aggregate signature1 with a new signature over message2
 		partsig1, signature2 := schoco.Aggregate(message2, signature1)
@@ -49,13 +49,13 @@ func TestBasic(t *testing.T) {
 func TestVerify(t *testing.T) {
 
 	// generate signature
-	signature1 := schoco.Sign(message1, rootSecretKey)
+	signature1 := schoco.StdSign(message1, rootSecretKey)
 
 	// Extract aggregation key and partial signature
 	aggKey, partSig := signature1.ExtractAggKey()
 
 	// Use aggregation key to sign a new message
-	signature2 := schoco.Sign(message2, aggKey)
+	signature2 := schoco.StdSign(message2, aggKey)
 
 	// Use schoCo.Aggregate to aggregate a new signature
 	partsig2, signature3 := schoco.Aggregate(message3, signature2)
