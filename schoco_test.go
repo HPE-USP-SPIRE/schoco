@@ -38,9 +38,9 @@ func TestBasic(t *testing.T) {
 		partsig1, signature2 := schoco.Aggregate(message2, signature1)
 
 		// validate concatenated signature
-		setSigR := []kyber.Point{signature2.R, partsig1}
+		setSigR := []kyber.Point{partsig1}
 		setMsg := []string{message2, message1}
-		if !schoco.Verify(rootPublicKey, setSigR, setMsg, signature2.S)	{
+		if !schoco.Verify(rootPublicKey, setMsg, setSigR, signature2)	{
 			t.Error("Validate schoco.Aggregate with schoco.Verify failed!")
 		}
 	})
@@ -61,19 +61,19 @@ func TestVerify(t *testing.T) {
 	partsig2, signature3 := schoco.Aggregate(message3, signature2)
 
 	t.Run("Validate Std signature (signature1) with schoco.Verify: ", func(t *testing.T) { 
-		setSigR := []kyber.Point{signature1.R}
+		setSigR := []kyber.Point{}
 		setMsg := []string{message1}
 
-		if !schoco.Verify(rootPublicKey, setSigR, setMsg, signature1.S)	{
+		if !schoco.Verify(rootPublicKey, setMsg, setSigR, signature1)	{
 			t.Error("Validate Std signature with schoco.Verify failed!")
 		}
 	})
 
 	t.Run("Validate SchoCo signature with schoco.Verify: ", func(t *testing.T) { 
-		setSigR := []kyber.Point{signature2.R, partSig}
+		setSigR := []kyber.Point{partSig}
 		setMsg := []string{message2, message1}
 
-		if !schoco.Verify(rootPublicKey, setSigR, setMsg, signature2.S)	{
+		if !schoco.Verify(rootPublicKey, setMsg, setSigR, signature2)	{
 			t.Error("Validate SchoCo signature with schoco.Verify failed!")
 		}
 	})
@@ -88,10 +88,10 @@ func TestVerify(t *testing.T) {
 	})
 
 	t.Run("Validate signature3 with schoco.Verify: ", func(t *testing.T) { 
-		setSigR := []kyber.Point{signature3.R, partsig2, partSig}
+		setSigR := []kyber.Point{partsig2, partSig}
 		setMsg := []string{message3, message2, message1}
 
-		if !schoco.Verify(rootPublicKey, setSigR, setMsg, signature3.S)	{
+		if !schoco.Verify(rootPublicKey, setMsg, setSigR, signature3)	{
 			t.Error("Validate SchoCo signature with schoco.Verify failed!")
 		}
 	})

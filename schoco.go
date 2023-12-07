@@ -7,10 +7,12 @@
 // 2 - Use the aggKey to sign a new message m_2
 // 3 - The concatenated signature is {partS1, S_2}
 // 
-// The validation requires:
-// - The concatenated signature e.g.: {partS1, S_2}
-// - The root public key
-// - The messages. e.g.: {m_1, m_2}
+// The validation requires: (IMPORTANT: All messages and partial signatures must be in reverse order )
+// - The set of partial signatures (partsig_n, ..., partsig_1)
+// - The last signature (sig_n+1)
+// - The root public key 
+// - The set of signed messages (message_n, ..., message_1)
+
 package schoco
 
 import (
@@ -60,50 +62,51 @@ func Aggregate(m string, sig1 Signature) (kyber.Point, Signature) {
 
 // Verify concatenated EdDSA signatures using SchoCo scheme
 // origpubkey: first public key
-// setPartSig: array with all Sig.R
+// setPartSig: array with all partial signatures
 // setMessages: array with all messages
-// lastsigS: last signature.S
-func Verify(origpubkey kyber.Point, setPartSig []kyber.Point, setMessages []string, lastsigS kyber.Scalar) bool {
+// lastsig: last signature (complete)
+func Verify(origpubkey kyber.Point, setMessages []string, setPartSig []kyber.Point, lastsig Signature) bool {
 
 	// Important to note that as new assertions are added in the beginning of the token, the content of arrays is in reverse order.
 	// e.g. setPartSig[0] = last appended signature.
-	if (len(setPartSig)) != len(setMessages) {
+	if (len(setPartSig)) != len(setMessages)-1 {
 		fmt.Println("Incorrect parameters!")
 		return false
 	}
 
-	var i = len(setPartSig) - 1
 	var y kyber.Point
-	var h kyber.Scalar
+	// var h kyber.Scalar
 	var leftside, rightside kyber.Point
 
-	if len(setPartSig) == 1 {
+	if len(setPartSig) == 0 {
 		y = origpubkey
+
 		// check if g ^ lastsig.S = lastsig.R - y ^ lastHash
-		leftside = curve.Point().Mul(lastsigS, g)
-		h = Hash(setPartSig[i].String() + setMessages[i] + y.String())
-		rightside = curve.Point().Sub(setPartSig[i], curve.Point().Mul(h, y))
-		// return leftside.Equal(rightside)
+		leftside = curve.Point().Mul(lastsig.S, g)
+		h := Hash(lastsig.R.String() + setMessages[0] + y.String())
+		rightside = curve.Point().Sub(lastsig.R, curve.Point().Mul(h, y))
 	} else {
+		var i = len(setPartSig) - 1
+
 		// calculate all y's from first to last-1 parts
-		for i > 0 {
+		for i >= 0 {
 			if i == len(setPartSig)-1 {
 				y = origpubkey
 			} else {
-				h = Hash(setPartSig[i+1].String() + setMessages[i+1] + y.String())
+				h := Hash(setPartSig[i+1].String() + setMessages[i+2] + y.String())
 				y = curve.Point().Sub(setPartSig[i+1], curve.Point().Mul(h, y))
 			}
 			i--
 		}
 
 		// calculate last y
-		h = Hash(setPartSig[i+1].String() + setMessages[i+1] + y.String())
+		h := Hash(setPartSig[i+1].String() + setMessages[i+2] + y.String())
 		y = curve.Point().Sub(setPartSig[i+1], curve.Point().Mul(h, y))
 
 		// check if g ^ lastsig.S = lastsig.R - y ^ lastHash
-		leftside = curve.Point().Mul(lastsigS, g)
-		h = Hash(setPartSig[i].String() + setMessages[i] + y.String())
-		rightside = curve.Point().Sub(setPartSig[i], curve.Point().Mul(h, y))
+		h = Hash(lastsig.R.String() + setMessages[i+1] + y.String())
+		leftside = curve.Point().Mul(lastsig.S, g)
+		rightside = curve.Point().Sub(lastsig.R, curve.Point().Mul(h, y))
 	}
 
 	return leftside.Equal(rightside)
