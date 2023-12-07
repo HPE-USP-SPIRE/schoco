@@ -34,13 +34,34 @@ func TestBasic(t *testing.T) {
 		// generate signature
 		signature1 := schoco.StdSign(message1, rootSecretKey)
 
+		// convert signature to bytes
+		sig1Bytes, err := signature1.ToByte()
+		if err != nil {
+			t.Error("Error converting sig to bytes")
+		}
+
 		// Aggregate signature1 with a new signature over message2
 		partsig1, signature2 := schoco.Aggregate(message2, signature1)
+		partsig1Bytes, signature2Bytes := schoco.NewAgg(message2, sig1Bytes)
+
 
 		// validate concatenated signature
 		setSigR := []kyber.Point{partsig1}
 		setMsg := []string{message2, message1}
 		if !schoco.Verify(rootPublicKey, setMsg, setSigR, signature2)	{
+			t.Error("Validate schoco.Aggregate with schoco.Verify failed!")
+		}
+
+		// validate using bytes
+		// Encode rootPublicKey to []byte
+		rootPublicKeyBytes, err := schoco.PointToByte(rootPublicKey)
+		if err != nil {
+			// Handle error
+		}
+		setPartSigBytes := [][]byte{partsig1Bytes}
+
+
+		if !schoco.NewVerify(rootPublicKeyBytes, setMsg, setPartSigBytes, signature2Bytes)	{
 			t.Error("Validate schoco.Aggregate with schoco.Verify failed!")
 		}
 	})
