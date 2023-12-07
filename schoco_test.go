@@ -18,7 +18,10 @@ var (
 )
 
 func TestBasic(t *testing.T) {
-	t.Run("Std Schnorr Signature creation and Validation", func(t *testing.T) {
+	t.Run("Std Schnorr Signature creation and Validation using random key pair", func(t *testing.T) {
+
+		// Create random key pair
+		rootSecretKey, rootPublicKey = schoco.KeyPair()
 
 		// generate signature
 		signature := schoco.StdSign(message1, rootSecretKey)
@@ -31,6 +34,9 @@ func TestBasic(t *testing.T) {
 
 	t.Run("Test schoco.Aggregate: ", func(t *testing.T) { 
 
+		// Create key pair given ID
+		rootSecretKey, rootPublicKey = schoco.KeyPair("secretKey")
+
 		// generate signature
 		signature1 := schoco.StdSign(message1, rootSecretKey)
 
@@ -40,9 +46,9 @@ func TestBasic(t *testing.T) {
 			t.Error("Error converting sig to bytes")
 		}
 
-		// Aggregate signature1 with a new signature over message2
+		// Aggregate signature1 with a new signature created using message2
 		partsig1, signature2 := schoco.Aggregate(message2, signature1)
-		partsig1Bytes, signature2Bytes := schoco.NewAgg(message2, sig1Bytes)
+		partsig1Bytes, signature2Bytes := schoco.TestByteAgg(message2, sig1Bytes)
 
 
 		// validate concatenated signature
@@ -61,7 +67,7 @@ func TestBasic(t *testing.T) {
 		setPartSigBytes := [][]byte{partsig1Bytes}
 
 
-		if !schoco.NewVerify(rootPublicKeyBytes, setMsg, setPartSigBytes, signature2Bytes)	{
+		if !schoco.TestByteVerify(rootPublicKeyBytes, setMsg, setPartSigBytes, signature2Bytes)	{
 			t.Error("Validate schoco.Aggregate with schoco.Verify failed!")
 		}
 	})

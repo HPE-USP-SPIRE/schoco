@@ -61,7 +61,7 @@ func Aggregate(m string, sig1 Signature) (kyber.Point, Signature) {
 	return partSig1, Signature{R: r, S: s}
 }
 
-// Verify concatenated EdDSA signatures using SchoCo scheme
+// Verification with support to both STD and concatenated schnorr signatures. If validating a std signature, setPartSig must be []kyber.Point{}.
 // origpubkey: first public key
 // setPartSig: array with all partial signatures
 // setMessages: array with all messages
@@ -113,8 +113,6 @@ func Verify(origpubkey kyber.Point, setMessages []string, setPartSig []kyber.Poi
 }
 
 // Sign using Schnorr EdDSA
-// SchoCo uses the same signature algorithm. 
-// Difference is in the key used
 // m: Message
 // x: Private key
 func StdSign(m string, z kyber.Scalar) Signature {
@@ -154,30 +152,19 @@ func StdVerify(m string, S Signature, y kyber.Point) bool {
 	return sG.Equal(sGv)
 }
 
-// Given ID, return a keypair
-func IDKeyPair(id string) (kyber.Scalar, kyber.Point) {
+// If given ID, return the corresponding keypair. Otherwise, create a new random key pair
+func KeyPair(id ...string) (kyber.Scalar, kyber.Point) {
 
-	privateKey := Hash(id)
-	publicKey := curve.Point().Mul(privateKey, curve.Point().Base())
-
-	return privateKey, publicKey
-}
-
-// Return a new random key pair
-func RandomKeyPair() (kyber.Scalar, kyber.Point) {
-
-	privateKey := curve.Scalar().Pick(curve.RandomStream())
-	publicKey := curve.Point().Mul(privateKey, curve.Point().Base())
+	var privateKey kyber.Scalar
+	var publicKey kyber.Point
+	if len(id) == 0 {
+		privateKey = curve.Scalar().Pick(curve.RandomStream())
+	} else {
+		privateKey = Hash(id[0])
+	}
+	publicKey = curve.Point().Mul(privateKey, curve.Point().Base())
 
 	return privateKey, publicKey
-}
-
-// Given string, return hash Scalar
-func Hash(s string) kyber.Scalar {
-	sha256.Reset()
-	sha256.Write([]byte(s))
-
-	return curve.Scalar().SetBytes(sha256.Sum(nil))
 }
 
 // Return Signature in a string format
@@ -206,7 +193,15 @@ func (sig Signature) ToByte() ([]byte, error) {
     return append(rBytes, sBytes...), nil
 }
 
-// DecodeSignature decodes a []byte to a Signature struct
+// Given string, return hash Scalar
+func Hash(s string) kyber.Scalar {
+	sha256.Reset()
+	sha256.Write([]byte(s))
+
+	return curve.Scalar().SetBytes(sha256.Sum(nil))
+}
+
+// Convert []byte to a Signature struct
 func ByteToSignature(data []byte) (Signature, error) {
 
 	// Initialize signature
@@ -232,6 +227,7 @@ func ByteToSignature(data []byte) (Signature, error) {
     return sig, nil
 }
 
+// Convert a []byte to a kyber point
 func ByteToPoint(pointBytes []byte) (kyber.Point, error) {
     point := curve.Point().Null()
     if err := point.UnmarshalBinary(pointBytes); err != nil {
@@ -240,6 +236,7 @@ func ByteToPoint(pointBytes []byte) (kyber.Point, error) {
     return point, nil
 }
 
+// Convert a kyber point to []byte
 func PointToByte(point kyber.Point) ([]byte, error) {
     pointBytes, err := point.MarshalBinary()
     if err != nil {
