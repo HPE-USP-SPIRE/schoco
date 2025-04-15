@@ -1,86 +1,92 @@
 package schoco_test
 
 import (
+	"encoding/json"
 	"fmt"
 	"testing"
+	"time"
 
-	"github.com/hpe-usp-spire/schoco"
 	"go.dedis.ch/kyber/v3"
+	"github.com/hpe-usp-spire/schoco"
 )
 
-
-func BenchmarkKeyCreation(b *testing.B) {
-	for i := 0; i < b.N; i++ {
-		_, _ = schoco.KeyPair() // Only measure the key creation
-	}
+type BenchmarkResult struct {
+	Hops               int64 `json:"hops"`
+	SignIndividualNS   int64 `json:"sign_individual_ns"`
+	SignAggregateNS    int64 `json:"sign_aggregate_ns"`
+	VerifyIndividualNS int64 `json:"verify_individual_ns"`
+	VerifyAggregateNS  int64 `json:"verify_aggregate_ns"`
 }
 
+func TestCompareAggregation(t *testing.T) {
+	var results []BenchmarkResult
 
-func BenchmarkSignatureAggregation(b *testing.B) {
-	for numMsgs := 1; numMsgs <= 40; numMsgs += 5 {
-		b.Run(fmt.Sprintf("SignAgg_%d_msgs", numMsgs), func(b *testing.B) {
-			// Setup: key pair
-			sk, _ := schoco.KeyPair()
+	for hops := int64(1); hops <= 40; hops += 5 {
+		var (
+			sk, pk      = schoco.KeyPair()
+			msgs        []string
+			sigs        []schoco.Signature
+			// partSigs    []kyber.Point
+			aggSig      schoco.Signature
+			aggMsgs     []string
+			aggPartSigs []kyber.Point
+		)
 
-			// First signature
-			baseMsg := fmt.Sprintf("msg%d", 1)
-			sig := schoco.StdSign(baseMsg, sk)
-			setSigR := []kyber.Point{}
-			setMsg := []string{baseMsg}
+		// --- Generate Messages ---
+		for i := int64(0); i < hops; i++ {
+			msgs = append(msgs, fmt.Sprintf("msg-%d", i))
+		}
 
-			// Aggregate remaining signatures
-			for i := 2; i <= numMsgs; i++ {
-				msg := fmt.Sprintf("msg%d", i)
-				partSig, nextSig := schoco.Aggregate(msg, sig)
-				sig = nextSig
-				setSigR = append([]kyber.Point{partSig}, setSigR...) // prepend
-				setMsg = append([]string{msg}, setMsg...)           // prepend
+		// --- Sign Individually ---
+		start := time.Now()
+		for _, m := range msgs {
+			sigs = append(sigs, schoco.StdSign(m, sk))
+		}
+		signIndividualNS := time.Since(start).Nanoseconds()
+
+		// --- Sign Aggregated ---
+		start = time.Now()
+		baseMsg := msgs[0]
+		aggSig = schoco.StdSign(baseMsg, sk)
+		aggMsgs = []string{baseMsg}
+		for i := 1; i < len(msgs); i++ {
+			partSig, newSig := schoco.Aggregate(msgs[i], aggSig)
+			aggSig = newSig
+			aggPartSigs = append([]kyber.Point{partSig}, aggPartSigs...) // prepend
+			aggMsgs = append([]string{msgs[i]}, aggMsgs...)              // prepend
+		}
+		signAggregateNS := time.Since(start).Nanoseconds()
+
+		// --- Verify Individually ---
+		start = time.Now()
+		for i, m := range msgs {
+			if !schoco.StdVerify(m, sigs[i], pk) {
+				t.Fatal("std verify failed")
 			}
+		}
+		verifyIndividualNS := time.Since(start).Nanoseconds()
 
-			// Measure aggregation time
-			b.ResetTimer()
-			for i := 0; i < b.N; i++ {
-				// Recreate the signatures for aggregation test
-				for i := 2; i <= numMsgs; i++ {
-					msg := fmt.Sprintf("msg%d", i)
-					partSig, nextSig := schoco.Aggregate(msg, sig)
-					sig = nextSig
-					setSigR = append([]kyber.Point{partSig}, setSigR...) // prepend
-					setMsg = append([]string{msg}, setMsg...)           // prepend
-				}
-			}
+		// --- Verify Aggregated ---
+		start = time.Now()
+		if !schoco.Verify(pk, aggMsgs, aggPartSigs, aggSig) {
+			t.Fatal("agg verify failed")
+		}
+		verifyAggregateNS := time.Since(start).Nanoseconds()
+
+		// Append result
+		results = append(results, BenchmarkResult{
+			Hops:               hops,
+			SignIndividualNS:   signIndividualNS,
+			SignAggregateNS:    signAggregateNS,
+			VerifyIndividualNS: verifyIndividualNS,
+			VerifyAggregateNS:  verifyAggregateNS,
 		})
 	}
-}
 
-
-func BenchmarkValidation(b *testing.B) {
-	for numMsgs := 1; numMsgs <= 40; numMsgs += 5 {
-		b.Run(fmt.Sprintf("Verify_%d_msgs", numMsgs), func(b *testing.B) {
-			// Setup: key pair
-			sk, pk := schoco.KeyPair()
-
-			// First signature
-			baseMsg := fmt.Sprintf("msg%d", 1)
-			sig := schoco.StdSign(baseMsg, sk)
-			setSigR := []kyber.Point{}
-			setMsg := []string{baseMsg}
-
-			// Aggregate remaining signatures
-			for i := 2; i <= numMsgs; i++ {
-				msg := fmt.Sprintf("msg%d", i)
-				partSig, nextSig := schoco.Aggregate(msg, sig)
-				sig = nextSig
-				setSigR = append([]kyber.Point{partSig}, setSigR...) // prepend
-				setMsg = append([]string{msg}, setMsg...)           // prepend
-			}
-
-			b.ResetTimer()
-			for i := 0; i < b.N; i++ {
-				if !schoco.Verify(pk, setMsg, setSigR, sig) {
-					b.Fatal("Verification failed")
-				}
-			}
-		})
+	// --- Print JSON ---
+	jsonOut, err := json.MarshalIndent(results, "", "  ")
+	if err != nil {
+		t.Fatal(err)
 	}
+	fmt.Println(string(jsonOut))
 }
