@@ -1,353 +1,211 @@
-// SchoCo package allows to concatenate Schnorr EdDSA signatures.
-// 
-// Usage:
-// Given an existing signature S_1 over m_1, one can concatenate it with a new one, by doing:
-// 1 - Extract the aggregation key and partial signature from S_1:
-// 			aggKey, partS1 := S_1.ExtractAggKey()
-// 2 - Use the aggKey to sign a new message m_2
-// 3 - The concatenated signature is {partS1, S_2}
-// 
-// The validation requires: (IMPORTANT: All messages and partial signatures must be in reverse order )
-// - The set of partial signatures (partsig_n, ..., partsig_1)
-// - The last signature (sig_n+1)
-// - The root public key 
-// - The set of signed messages (message_n, ..., message_1)
-
 package schoco
 
 import (
-	"fmt"
+	"crypto/rand"
+	"crypto/sha256"
 	"errors"
 
-	"go.dedis.ch/kyber/v3"
-	"go.dedis.ch/kyber/v3/group/edwards25519"
+	"filippo.io/edwards25519"
 )
 
-// Set parameters
-var (
-	curve = edwards25519.NewBlakeSHA256Ed25519()
-	sha256 = curve.Hash()
-	g = curve.Point().Base()
-)
+/* ============================================================
+   Types
+============================================================ */
 
 type Signature struct {
-	R kyber.Point
-	S kyber.Scalar
+	R *edwards25519.Point
+	S *edwards25519.Scalar
 }
 
-// given a new message m and an existing signature sig_1,
-// return an schoco signature sig_2 = {partSig1, sig2}
-// If sig_1 is already a concatenated signature, aggregation uses only the last complete signature (partSig_n, aggkey_n).
-// The resulting concatenated signature is composed of all previous partial signatures (partsig_1, ..., partsig_n) and the new signature sig_n+1.
-func Aggregate(m string, sig1 Signature) (kyber.Point, Signature) {
+/* ============================================================
+   Hash utilities
+============================================================ */
 
-	// Pick a random k from allowed set.
-	k := curve.Scalar().Pick(curve.RandomStream())
+func hashToScalar(parts ...[]byte) *edwards25519.Scalar {
+	h := sha256.New()
+	for _, p := range parts {
+		h.Write(p)
+	}
+	digest := h.Sum(nil) // 32 bytes SHA-256
 
-	// r = k * G (a.k.a the same operation as r = g^k)
-	r := curve.Point().Mul(k, g)
-
-	// Extract aggKey and partial signature
-	aggKey, partSig1 := sig1.ExtractAggKey()
-
-	// h := Hash(r.String() + m + publicKey)
-	publicKey := curve.Point().Mul(aggKey, g)
-	h := Hash(r.String() + m + publicKey.String())
-
-	// s = k - e * x
-	s := curve.Scalar().Sub(k, curve.Scalar().Mul(h, aggKey))
-
-	// Return the partial signature and the new full signature
-	return partSig1, Signature{R: r, S: s}
+	s := new(edwards25519.Scalar)
+	s.SetBytesWithClamping(digest) // OK com 32 bytes
+	return s
 }
 
-// Verification with support to both STD and concatenated schnorr signatures. If validating a std signature, setPartSig must be []kyber.Point{}.
-// origpubkey: first public key
-// setPartSig: array with all partial signatures
-// setMessages: array with all messages
-// lastsig: last signature (complete)
-func Verify(origpubkey kyber.Point, setMessages []string, setPartSig []kyber.Point, lastsig Signature) bool {
+/* ============================================================
+   Key generation
+============================================================ */
 
-	// Important to note that as new assertions are added in the beginning of the token, the content of arrays is in reverse order.
-	// e.g. setPartSig[0] = last appended signature.
-	if (len(setPartSig)) != len(setMessages)-1 {
-		fmt.Println("Incorrect parameters!")
+func KeyPair() (*edwards25519.Scalar, *edwards25519.Point, error) {
+	var seed [32]byte
+	if _, err := rand.Read(seed[:]); err != nil {
+		return nil, nil, err
+	}
+
+	sk := new(edwards25519.Scalar)
+	sk.SetBytesWithClamping(seed[:])
+	pk := new(edwards25519.Point).ScalarBaseMult(sk)
+	return sk, pk, nil
+}
+
+/* ============================================================
+   Standard Schnorr signature
+============================================================ */
+
+func StdSign(msg []byte, sk *edwards25519.Scalar) (*Signature, error) {
+	var nonce [32]byte
+	if _, err := rand.Read(nonce[:]); err != nil {
+		return nil, err
+	}
+	k := new(edwards25519.Scalar)
+	k.SetBytesWithClamping(nonce[:])
+
+	R := new(edwards25519.Point).ScalarBaseMult(k)
+	pk := new(edwards25519.Point).ScalarBaseMult(sk)
+
+	Rb := R.Bytes()
+	PKb := pk.Bytes()
+
+	h := hashToScalar(Rb[:], msg, PKb[:])
+
+	S := new(edwards25519.Scalar)
+	S.Multiply(h, sk)
+	S.Negate(S)
+	S.Add(S, k)
+
+	return &Signature{R, S}, nil
+}
+
+/* ============================================================
+   Standard Schnorr signature verification
+============================================================ */
+
+func StdVerify(msg []byte, sig *Signature, pk *edwards25519.Point) bool {
+	if sig == nil || sig.R == nil || sig.S == nil || pk == nil {
 		return false
 	}
 
-	var y kyber.Point
-	var leftside, rightside kyber.Point
+	// h = H(R || msg || pk)
+	h := hashToScalar(sig.R.Bytes(), msg, pk.Bytes())
 
-	if len(setPartSig) == 0 {
-		y = origpubkey
+	// left = S*B
+	left := new(edwards25519.Point).ScalarBaseMult(sig.S)
 
-		// check if g ^ lastsig.S = lastsig.R - y ^ lastHash
-		leftside = curve.Point().Mul(lastsig.S, g)
-		h := Hash(lastsig.R.String() + setMessages[0] + y.String())
-		rightside = curve.Point().Sub(lastsig.R, curve.Point().Mul(h, y))
-	} else {
-		var i = len(setPartSig) - 1
+	// right = R - h*pk => R - h*pk = R + (-h*pk)
+	hpk := new(edwards25519.Point).ScalarMult(h, pk)
+	right := new(edwards25519.Point).Subtract(sig.R, hpk)
 
-		// calculate all y's from first to last-1 parts
-		for i >= 0 {
-			if i == len(setPartSig)-1 {
-				y = origpubkey
-			} else {
-				h := Hash(setPartSig[i+1].String() + setMessages[i+2] + y.String())
-				y = curve.Point().Sub(setPartSig[i+1], curve.Point().Mul(h, y))
-			}
-			i--
-		}
+	return left.Equal(right) == 1
+}
 
-		// calculate last y
-		h := Hash(setPartSig[i+1].String() + setMessages[i+2] + y.String())
-		y = curve.Point().Sub(setPartSig[i+1], curve.Point().Mul(h, y))
+/* ============================================================
+   SchoCo aggregation
+============================================================ */
 
-		// check if g ^ lastsig.S = lastsig.R - y ^ lastHash
-		h = Hash(lastsig.R.String() + setMessages[i+1] + y.String())
-		leftside = curve.Point().Mul(lastsig.S, g)
-		rightside = curve.Point().Sub(lastsig.R, curve.Point().Mul(h, y))
+func Aggregate(
+	msg []byte,
+	prev *Signature,
+) (*edwards25519.Point, *Signature, error) {
+
+	var nonce [64]byte
+	if _, err := rand.Read(nonce[:]); err != nil {
+		return nil, nil, err
 	}
 
-	return leftside.Equal(rightside)
-}
-
-// Sign using Schnorr EdDSA
-// m: Message
-// x: Private key
-func StdSign(m string, z kyber.Scalar) Signature {
-
-	// Pick a random k from allowed set.
-	k := curve.Scalar().Pick(curve.RandomStream())
-
-	// r = k * G (a.k.a the same operation as r = g^k)
-	r := curve.Point().Mul(k, g)
-
-	// h := Hash(r.String() + m + publicKey)
-	publicKey := curve.Point().Mul(z, g)
-	h := Hash(r.String() + m + publicKey.String())
-
-	// s = k - e * x
-	s := curve.Scalar().Sub(k, curve.Scalar().Mul(h, z))
-
-	return Signature{R: r, S: s}
-}
-
-// StdVerify is the STD validation of a Schnorr EdDSA signature
-// TODO: Keeping for debugging purposes. Remove it later.
-// m: Message
-// s: Signature
-// y: Public key
-func StdVerify(m string, S Signature, y kyber.Point) bool {
-
-	h := Hash(S.R.String() + m + y.String())
-
-	// Attempt to reconstruct 's * G' with a provided signature; s * G = r - h * y
-	sGv := curve.Point().Sub(S.R, curve.Point().Mul(h, y))
-
-	// Construct the actual 's * G'
-	sG := curve.Point().Mul(S.S, g)
-
-	// Equality check; ensure signature and public key outputs to s * G.
-	return sG.Equal(sGv)
-}
-
-// If given ID, return the corresponding keypair. Otherwise, create a new random key pair
-func KeyPair(id ...string) (kyber.Scalar, kyber.Point) {
-
-	var privateKey kyber.Scalar
-	var publicKey kyber.Point
-	if len(id) == 0 {
-		privateKey = curve.Scalar().Pick(curve.RandomStream())
-	} else {
-		privateKey = Hash(id[0])
-	}
-	publicKey = curve.Point().Mul(privateKey, curve.Point().Base())
-
-	return privateKey, publicKey
-}
-
-// Return Signature in a string format
-func (S Signature) String() string {
-	return fmt.Sprintf("(r=%s, s=%s)", S.R, S.S)
-}
-
-// Return the aggregation key and partial signature
-func (S Signature) ExtractAggKey() (aggKey kyber.Scalar, partSig kyber.Point) {
-	return S.S, S.R
-}
-
-// ToByte encodes a Signature struct to []byte
-func (sig Signature) ToByte() ([]byte, error) {
-
-    rBytes, err := sig.R.MarshalBinary()
-    if err != nil {
-        return nil, err
-    }
-
-    sBytes, err := sig.S.MarshalBinary()
-    if err != nil {
-        return nil, err
-    }
-
-    return append(rBytes, sBytes...), nil
-}
-
-// Given string, return hash Scalar
-func Hash(s string) kyber.Scalar {
-	sha256.Reset()
-	sha256.Write([]byte(s))
-
-	return curve.Scalar().SetBytes(sha256.Sum(nil))
-}
-
-// Convert []byte to a Signature struct
-func ByteToSignature(data []byte) (Signature, error) {
-
-	// Initialize signature
-    sig := Signature{
-        R: curve.Point().Null(), 
-        S: curve.Scalar().Zero(), 
-    }
-
-    rLen := len(data) / 2
-    if rLen*2 != len(data) {
-        return sig, errors.New("invalid signature length")
-    }
-
-    if err := sig.R.UnmarshalBinary(data[:rLen]); err != nil {
-        return sig, err
-    }
-
-	sig.S = curve.Scalar().SetBytes(data[rLen:])
-
-    if sig.S == nil {
-        return sig, errors.New("invalid scalar value")
-    }
-    return sig, nil
-}
-
-// Convert a []byte to a kyber point
-func ByteToPoint(pointBytes []byte) (kyber.Point, error) {
-    point := curve.Point().Null()
-    if err := point.UnmarshalBinary(pointBytes); err != nil {
-        return nil, err
-    }
-    return point, nil
-}
-
-// Convert a kyber point to []byte
-func PointToByte(point kyber.Point) ([]byte, error) {
-    pointBytes, err := point.MarshalBinary()
-    if err != nil {
-        return nil, err
-    }
-    return pointBytes, nil
-}
-
-
-//  Draft ///////////////////////////////////////
-
-
-//  The functions below can or not be part of the package. Must evaluate the need and convenience
-// Verification function using []byte instead specific kyber and Signature struct
-func TestByteVerify(rootPubKeyBytes []byte, setMessages []string, setPartSig [][]byte, lastSigBytes []byte) bool {
-
-	// Important to note that as new assertions are added in the beginning of the token, the content of arrays is in reverse order.
-	// e.g. setPartSig[0] = last appended signature.
-	if (len(setPartSig)) != len(setMessages)-1 {
-		fmt.Println("Incorrect parameters!")
-		return false
-	}
-
-	// Convert all
-	// 
-	// Decode origpubkey from []byte
-	rootPK, err := ByteToPoint(rootPubKeyBytes)
+	k, err := new(edwards25519.Scalar).SetUniformBytes(nonce[:])
 	if err != nil {
-		// Handle error
+		return nil, nil, err
 	}
 
-	var y kyber.Point
-	var leftside, rightside kyber.Point
+	R := new(edwards25519.Point).ScalarBaseMult(k)
 
-	if len(setPartSig) == 0 {
-		y = rootPK
+	aggKey := prev.S
+	partSig := prev.R
 
-		// check if g ^ lastsig.S = lastsig.R - y ^ lastHash
-		lastSig, _ := ByteToSignature(lastSigBytes)
-		leftside = curve.Point().Mul(lastSig.S, g)
-		h := Hash(lastSig.R.String() + setMessages[0] + y.String())
-		rightside = curve.Point().Sub(lastSig.R, curve.Point().Mul(h, y))
-	} else {
-		var i = len(setPartSig) - 1
+	pk := new(edwards25519.Point).ScalarBaseMult(aggKey)
 
-		// calculate all y's from first to last-1 parts
-		for i >= 0 {
-			if i == len(setPartSig)-1 {
-				y = rootPK
-			} else {
-				// Decode partialsig from []byte
-				partSig, err := ByteToPoint(setPartSig[i+1])
-				if err != nil {
-					// Handle error
-				}
-				h := Hash(partSig.String() + setMessages[i+2] + y.String())
-				y = curve.Point().Sub(partSig, curve.Point().Mul(h, y))
-			}
-			i--
-		}
+	Rb := R.Bytes()
+	PKb := pk.Bytes()
 
-		// calculate last y
-		partSig, err := ByteToPoint(setPartSig[i+1])
-		if err != nil {
-			// Handle error
-		}
-		h := Hash(partSig.String() + setMessages[i+2] + y.String())
-		y = curve.Point().Sub(partSig, curve.Point().Mul(h, y))
+	h := hashToScalar(Rb[:], msg, PKb[:])
 
-		// check if g ^ lastsig.S = lastsig.R - y ^ lastHash
-		lastSig, err := ByteToSignature(lastSigBytes)
-		if err != nil {
-			// Handle error
-		}
-		h = Hash(lastSig.R.String() + setMessages[i+1] + y.String())
-		leftside = curve.Point().Mul(lastSig.S, g)
-		rightside = curve.Point().Sub(lastSig.R, curve.Point().Mul(h, y))
-	}
+	S := new(edwards25519.Scalar)
+	S.Multiply(h, aggKey)
+	S.Negate(S)
+	S.Add(S, k)
 
-	return leftside.Equal(rightside)
+	return partSig, &Signature{R, S}, nil
 }
 
+/* ============================================================
+   Verification
+============================================================ */
 
-// Same aggregation function, but using signatures and partial signatures in []byte format for compatibility purposes.
-func TestByteAgg(m string, prevSig []byte) ([]byte, []byte) {
+func Verify(
+	rootPK *edwards25519.Point,
+	messages [][]byte,
+	partSigs []*edwards25519.Point,
+	lastSig *Signature,
+) bool {
 
-	// Pick a random k from allowed set.
-	k := curve.Scalar().Pick(curve.RandomStream())
+	if len(partSigs) != len(messages)-1 {
+		return false
+	}
 
-	// r = k * G (a.k.a the same operation as r = g^k)
-	r := curve.Point().Mul(k, g)
+	y := new(edwards25519.Point).Set(rootPK)
 
-	// Convert sig from []byte to Signature
-	// TODO: Error handling
-	sig, _ := ByteToSignature(prevSig)
+	for i := len(partSigs) - 1; i >= 0; i-- {
+		Rb := partSigs[i].Bytes()
+		Yb := y.Bytes()
 
-	// Extract aggKey and partial signature
-	aggKey, prevPartial := sig.ExtractAggKey()
+		h := hashToScalar(Rb[:], messages[i+1], Yb[:])
 
-	// h := Hash(r.String() + m + publicKey)
-	publicKey := curve.Point().Mul(aggKey, g)
-	h := Hash(r.String() + m + publicKey.String())
+		hy := new(edwards25519.Point).ScalarMult(h, y)
+		y.Subtract(partSigs[i], hy)
+	}
 
-	// s = k - e * x
-	s := curve.Scalar().Sub(k, curve.Scalar().Mul(h, aggKey))
+	Rb := lastSig.R.Bytes()
+	Yb := y.Bytes()
 
-	// Convert signature to byte
-	// TODO: Error handling
-	fullSig, _ := Signature{R: r, S: s}.ToByte()
-	prevPartialBytes, _ :=  prevPartial.MarshalBinary()
+	h := hashToScalar(Rb[:], messages[0], Yb[:])
 
-	// Return the partial signature and the new full signature
-	return prevPartialBytes, fullSig
+	left := new(edwards25519.Point).ScalarBaseMult(lastSig.S)
+	right := new(edwards25519.Point).ScalarMult(h, y)
+	right.Subtract(lastSig.R, right)
+
+	return left.Equal(right) == 1
+}
+
+/* ============================================================
+   Serialization
+============================================================ */
+
+func (s *Signature) MarshalBinary() ([]byte, error) {
+	if s == nil || s.R == nil || s.S == nil {
+		return nil, errors.New("nil signature")
+	}
+
+	out := make([]byte, 64)
+	copy(out[:32], s.R.Bytes()[:])
+	copy(out[32:], s.S.Bytes()[:])
+	return out, nil
+}
+
+func UnmarshalSignature(data []byte) (*Signature, error) {
+	if len(data) != 64 {
+		return nil, errors.New("invalid signature length")
+	}
+
+	R, err := new(edwards25519.Point).SetBytes(data[:32])
+	if err != nil {
+		return nil, err
+	}
+
+	S := new(edwards25519.Scalar)
+	if _, err := S.SetCanonicalBytes(data[32:]); err != nil {
+		return nil, err
+	}
+
+	return &Signature{R, S}, nil
 }
