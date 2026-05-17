@@ -1,51 +1,76 @@
-# SchoCo: Schnorr Signature Concatenation Scheme
+# SchoCo Package
 
-This Go package implements the SchoCo scheme, an extension of the Schnorr digital signature that supports signature concatenation.  
-It enables efficient aggregation of multiple signatures, making it suitable for applications requiring compact and verifiable multi-signature schemes.
+This module contains the SchoCo implementation used by PACT `ModeSchoCo`.
+Within this artifact, SchoCo is not used as a generic application API; it is
+used to authenticate PACT prefixes with an explicit slot mapping.
 
-## Features
+## PACT-Aware API
 
-- Schnorr digital signature implementation
-- Support for signature concatenation (SchoCo)
-- Benchmarking tools for performance evaluation
-- Comprehensive test suite
+PACT integrations should use:
 
-## Installation
+- `PACTSlotMessage(slot uint64, prefix []byte) []byte`
+- `StdSignPACT(slot uint64, prefix []byte, sk *edwards25519.Scalar)`
+- `AggregatePACT(slot uint64, prefix []byte, prev *Signature)`
+- `VerifyPACT(rootPK *edwards25519.Point, prefixes [][]byte, partSigs []*edwards25519.Point, lastSig *Signature)`
 
-To include `schoco` in your Go project:
+The generic raw-message APIs remain available for low-level compatibility tests
+and non-PACT experiments, but PACT `ModeSchoCo` uses the PACT-aware wrappers.
+
+## Prefix Mapping
+
+PACT prefixes are passed to `VerifyPACT` in natural order:
+
+```text
+prefixes[0] = P_0
+prefixes[1] = P_1
+...
+prefixes[k] = P_k
+```
+
+`VerifyPACT` maps `P_i` to SchoCo slot `i+1` internally. Callers do not manually
+construct raw SchoCo messages for normal PACT validation.
+
+## Slot Message Encoding
+
+`PACTSlotMessage` includes:
+
+- a domain separator: `PACT-SCHOCO-SLOT-V1`;
+- the one-based slot/index;
+- the PACT prefix bytes.
+
+Variable-length fields are length-prefixed, and the slot is fixed-width
+big-endian. This makes the signed message encoding unambiguous and prevents a
+PACT integration from accidentally signing only raw prefix bytes.
+
+## Challenge Scalars
+
+SchoCo challenge derivation uses a domain-separated transcript and canonical
+scalar reduction via the `filippo.io/edwards25519` APIs. Nonce/key generation is
+kept separate from challenge scalar derivation.
+
+## Test Coverage
+
+Tests cover:
+
+- slot 1 versus slot 2 for the same prefix;
+- different prefixes in the same slot;
+- ambiguous raw-concatenation cases;
+- deterministic slot-message construction;
+- `P_0 -> slot 1`, `P_1 -> slot 2`, and so on;
+- reorder, reindex, missing-prefix, and same-length replacement rejection;
+- rejection of PACT validation for signatures produced over raw messages that
+  omit the slot/index.
+
+## Tests
 
 ```bash
-go get github.com/HPE-USP-SPIRE/schoco
+cd /home/byron/jisa/artifacts/schoco
+env GOCACHE=/tmp/go-build-schoco go test -count=1 ./...
 ```
 
-## Usage  
+Benchmarks local to this module can be run with:
 
-Import the package in your Go code:
-
+```bash
+cd /home/byron/jisa/artifacts/schoco
+env GOCACHE=/tmp/go-build-schoco go test -run '^$' -bench . -benchmem ./...
 ```
-import "github.com/HPE-USP-SPIRE/schoco"
-```
-
-## Run Tests  
-
-```
-go test -v
-```
-
-## Run Benchmarks
-
-```
-go test -bench=Benchmark -benchmem
-```
-
-## Details
-
-⚠️ This project is a **PROOF OF CONCEPT** and is provided without any warranties or guarantees. Use at your own risk.  
-
-The package is a  provides functions for key generation, signing, verification, and signature concatenation.
-
-Additional details are available in the source code.  
-
-
-
-
