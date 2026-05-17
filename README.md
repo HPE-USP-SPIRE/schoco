@@ -64,13 +64,11 @@ Tests cover:
 ## Tests
 
 ```bash
-cd /home/byron/jisa/artifacts/schoco
 env GOCACHE=/tmp/go-build-schoco go test -count=1 ./...
 ```
 
 Benchmarks local to this module can be run with:
 
 ```bash
-cd /home/byron/jisa/artifacts/schoco
 env GOCACHE=/tmp/go-build-schoco go test -run '^$' -bench . -benchmem ./...
 ```
