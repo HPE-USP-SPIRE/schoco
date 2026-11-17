@@ -1,74 +1,59 @@
-# SchoCo Package
+# SchoCo: Schnorr Signature Concatenation
 
-This module contains the SchoCo implementation used by PACT `ModeSchoCo`.
-Within this artifact, SchoCo is not used as a generic application API; it is
-used to authenticate PACT prefixes with an explicit slot mapping.
+SchoCo is a Go implementation of a Schnorr-based half-aggregate signature scheme designed for extensible tokens. It enables sequential authentication of messages, allowing a holder to extend an authenticated sequence without access to the original signer's private key.
 
-## PACT-Aware API
+The construction and its security properties are described in:
 
-PACT integrations should use:
+**SchoCo: Schnorr signature concatenation for extensible tokens**  
+*Journal of Information Security and Applications*, Volume 97, 2026.  
+https://doi.org/10.1016/j.jisa.2025.104327
 
-- `PACTSlotMessage(slot uint64, prefix []byte) []byte`
-- `StdSignPACT(slot uint64, prefix []byte, sk *edwards25519.Scalar)`
-- `AggregatePACT(slot uint64, prefix []byte, prev *Signature)`
-- `VerifyPACT(rootPK *edwards25519.Point, prefixes [][]byte, partSigs []*edwards25519.Point, lastSig *Signature)`
+## Features
 
-The generic raw-message APIs remain available for low-level compatibility tests
-and non-PACT experiments, but PACT `ModeSchoCo` uses the PACT-aware wrappers.
+- Schnorr-based digital signatures.
+- Sequential signature aggregation and verification.
+- Token continuation without access to the original signing key.
+- Go implementation with correctness tests and benchmarks.
+- Application-specific helpers for PACT/SACT integration.
 
-## Prefix Mapping
-
-PACT prefixes are passed to `VerifyPACT` in natural order:
-
-```text
-prefixes[0] = P_0
-prefixes[1] = P_1
-...
-prefixes[k] = P_k
-```
-
-`VerifyPACT` maps `P_i` to SchoCo slot `i+1` internally. Callers do not manually
-construct raw SchoCo messages for normal PACT validation.
-
-## Slot Message Encoding
-
-`PACTSlotMessage` includes:
-
-- a domain separator: `PACT-SCHOCO-SLOT-V1`;
-- the one-based slot/index;
-- the PACT prefix bytes.
-
-Variable-length fields are length-prefixed, and the slot is fixed-width
-big-endian. This makes the signed message encoding unambiguous and prevents a
-PACT integration from accidentally signing only raw prefix bytes.
-
-## Challenge Scalars
-
-SchoCo challenge derivation uses a domain-separated transcript and canonical
-scalar reduction via the `filippo.io/edwards25519` APIs. Nonce/key generation is
-kept separate from challenge scalar derivation.
-
-## Test Coverage
-
-Tests cover:
-
-- slot 1 versus slot 2 for the same prefix;
-- different prefixes in the same slot;
-- ambiguous raw-concatenation cases;
-- deterministic slot-message construction;
-- `P_0 -> slot 1`, `P_1 -> slot 2`, and so on;
-- reorder, reindex, missing-prefix, and same-length replacement rejection;
-- rejection of PACT validation for signatures produced over raw messages that
-  omit the slot/index.
-
-## Tests
+## Installation
 
 ```bash
-env GOCACHE=/tmp/go-build-schoco go test -count=1 ./...
+go get github.com/hpe-usp-spire/schoco
 ```
 
-Benchmarks local to this module can be run with:
+## API
+
+The package provides the following core operations:
+
+- `KeyPair`: generate a signing key pair.
+- `StdSign` and `StdVerify`: sign and verify individual messages.
+- `Aggregate`: extend an existing signature with a new message.
+- `Verify`: verify an authenticated sequence of messages.
+- `MarshalBinary` and `UnmarshalSignature`: serialize and deserialize signatures.
+
+The package also includes PACT-specific wrappers (`PACTSlotMessage`, `StdSignPACT`, `AggregatePACT`, and `VerifyPACT`) that bind authorization prefixes to explicit signature positions. These are application-specific helpers; the core SchoCo API operates on arbitrary messages.
+
+## Tests and Benchmarks
+
+Run the test suite:
 
 ```bash
-env GOCACHE=/tmp/go-build-schoco go test -run '^$' -bench . -benchmem ./...
+go test ./...
 ```
+
+Run benchmarks:
+
+```bash
+go test -run '^$' -bench . -benchmem ./...
+```
+
+## Research Prototype
+
+This implementation is intended for research and experimental evaluation. It has not been independently audited for production deployment.
+
+## License
+
+Licensed under the Apache License, Version 2.0. See [LICENSE](LICENSE).
+
+Third-party dependencies retain their respective licenses.
